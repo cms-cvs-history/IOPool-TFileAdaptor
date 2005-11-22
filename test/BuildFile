@@ -1,0 +1,5 @@
+<use name=Foundation/SealBase>
+<use name=rootcore>
+
+<module file=tfileTest.cpp> 
+</module>
