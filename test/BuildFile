@@ -1,4 +1,5 @@
 <use name=Foundation/SealBase>
+<use name=Foundation/PluginManager>
 <use name=rootcore>
 
 <bin file=tfileTest.cpp> 
