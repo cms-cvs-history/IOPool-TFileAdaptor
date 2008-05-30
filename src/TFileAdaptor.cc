@@ -81,7 +81,7 @@ TFileAdaptor::TFileAdaptor (const TFileAdaptorParams& iparams)
   StorageFactory::get()->enableAccounting (m_params.doStats);
 
   // enable file access caching in ROOT if requested
-  TStorageFactoryFile::DefaultBuffering (m_params.doBuffering);
+  TStorageFactoryFile::DefaultBuffering (m_params.doBuffering, m_params.dcacheBufferSize);
   TStorageFactoryFile::DefaultCaching (m_params.cacheSize, m_params.cachePageSize);
 
   // set our own root plugins

@@ -22,9 +22,11 @@ struct TFileAdaptorParams
   int  cacheSize;
   int  cachePageSize;
   std::vector<std::string> m_native;
+  int dcacheBufferSize;
 
   void init (void) const;
   bool native (const char *proto) const;
+
 private:
   void pinit (void);
 };

@@ -16,6 +16,7 @@ ClassImp(TStorageFactoryFile)
 bool TStorageFactoryFile::s_bufferDefault = false;
 Int_t TStorageFactoryFile::s_cacheDefaultCacheSize = kDefaultCacheSize;
 Int_t TStorageFactoryFile::s_cacheDefaultPageSize = kDefaultPageSize;
+int TStorageFactoryFile::s_dcacheBufferSize = 1048576;
 
 static StorageAccount::Counter *s_statsSeek = 0;
 static StorageAccount::Counter *s_statsXSeek = 0;
@@ -37,9 +38,10 @@ storageCounter (StorageAccount::Counter **c, const char *label)
 }
 
 void
-TStorageFactoryFile::DefaultBuffering (bool useit)
+TStorageFactoryFile::DefaultBuffering (bool useit, int dcacheBufferSize)
 {
   s_bufferDefault = useit;
+  s_dcacheBufferSize = dcacheBufferSize;
 }
 
 void
@@ -123,7 +125,7 @@ TStorageFactoryFile::TStorageFactoryFile (const char *path,
     openFlags |= IOFlags::OpenUnbuffered;
 
   // Open storage
-  if (! (m_storage = StorageFactory::get ()->open (path, openFlags)))
+  if (! (m_storage = StorageFactory::get ()->open (path, openFlags, std::string(), s_dcacheBufferSize)))
   {
      MakeZombie();
      gDirectory = gROOT;
@@ -308,7 +310,7 @@ TStorageFactoryFile::SysOpen (const char *pathname, Int_t flags, UInt_t mode)
   if (s_cacheDefaultCacheSize || ! s_bufferDefault)
     openFlags |= IOFlags::OpenUnbuffered;
 
-  if (! (m_storage = StorageFactory::get ()->open (pathname, openFlags)))
+  if (! (m_storage = StorageFactory::get ()->open (pathname, openFlags, std::string(), s_dcacheBufferSize)))
   {
      MakeZombie();
      gDirectory = gROOT;

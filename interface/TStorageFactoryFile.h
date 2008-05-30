@@ -26,7 +26,7 @@ public:
 
   void			ResetErrno (void) const;
 
-  static void		DefaultBuffering (bool useit);
+  static void		DefaultBuffering (bool useit, int dcacheBufferSize);
   static void		DefaultCaching (Int_t cacheSize = kDefaultCacheSize,
 				        Int_t pageSize = kDefaultPageSize);
 
@@ -52,6 +52,7 @@ private:
   static bool		s_bufferDefault;	//< Default buffering setting
   static Int_t		s_cacheDefaultCacheSize;//< Default cache size per file, in megabytes
   static Int_t		s_cacheDefaultPageSize;	//< Default cache page size
+  static int            s_dcacheBufferSize;     //< Buffer size used by DCACHE
 };
 
 #endif // TFILE_ADAPTOR_TSTORAGE_FACTORY_FILE_H
