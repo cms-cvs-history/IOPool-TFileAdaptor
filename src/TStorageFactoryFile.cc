@@ -12,11 +12,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <iostream>
 
 #if 0
 #include "TTreeCache.h"
 #include "TTree.h"
-#include <iostream>
 
 class TTreeCacheDebug : public TTreeCache {
 public:
@@ -212,21 +212,20 @@ TStorageFactoryFile::ReadBuffer(char *buf, Int_t len)
 
     Int_t st = ReadBufferViaCache(async ? 0 : buf, len);
 
-    if (st == 2)
+    if (st == 2) {
       return kTRUE;
+    }
 
-    if (st == 1)
-      if (async)
-      {
+    if (st == 1) {
+      if (async) {
         cstats.tick(len);
 	Seek(here);
-      }
-      else
-      {
+      } else {
         cstats.tick(len);
         stats.tick(len);
         return kFALSE;
       }
+    }
   }
 
   // FIXME: Re-enable read-ahead if the data wasn't in cache.
