@@ -308,6 +308,69 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
     return kTRUE;
   }
 
+  if (buf) {
+    // Code ported from ROOT v5.26 trunk by Brian Bockelman.
+    // This should coalesce reads into a smaller number of large reads.
+    Int_t k = 0;
+    Bool_t result = kTRUE;
+    TFileCacheRead *old = fCacheRead;
+    fCacheRead = 0;
+    Long64_t curbegin = pos[0];
+    Long64_t cur;
+    char *buf2 = 0;
+    Int_t i = 0, n = 0, ctr = 0;
+    Int_t fgReadaheadSize = 262144;
+    while (i < nbuf) {
+       cur = pos[i]+len[i];
+       Bool_t bigRead = kTRUE;
+       if (cur -curbegin < fgReadaheadSize) {n++; i++; bigRead = kFALSE;}
+       if (bigRead || (i>=nbuf)) {
+          if (n == 0) {
+             //if the block to read is about the same size as the read-ahead buffer
+             //we read the block directly
+             Seek(pos[i]);
+
+             StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
+             result = (storage_->xread(&buf[k], len[i])) ? kFALSE : kTRUE;
+             xstats.tick(len[i]);
+             
+             if (result) break;
+             k += len[i];
+             i++;
+          } else {
+             //otherwise we read all blocks that fit in the read-ahead buffer
+             Seek(curbegin);
+             if (buf2 == 0) buf2 = new char[fgReadaheadSize];
+             //we read ahead
+             Long64_t nahead = pos[i-1]+len[i-1]-curbegin;
+
+             StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
+             result = (storage_->xread(buf2, nahead)) ? kFALSE : kTRUE;
+             xstats.tick(nahead);
+
+             ctr++;
+             if (result) break;
+             //now copy from the read-ahead buffer to the cache
+             Int_t kold = k;
+             for (Int_t j=0;j<n;j++) {
+                memcpy(&buf[k],&buf2[pos[i-n+j]-curbegin],len[i-n+j]);
+                k += len[i-n+j];
+             }
+             Int_t nok = k-kold;
+             Long64_t extra = nahead-nok;
+             //fBytesReadExtra += extra;
+             //fBytesRead      -= extra;
+             //fgBytesRead     -= extra;
+             n = 0;
+          }
+          curbegin = pos[i];
+       }
+    }
+    if (buf2) delete [] buf2;
+    fCacheRead = old;
+    return result;
+  }
+
   // Read from underlying storage.
   Int_t total = 0;
   std::vector<IOPosBuffer> iov;
