@@ -77,7 +77,7 @@ static StorageAccount::Counter *s_statsCRead = 0;
 static StorageAccount::Counter *s_statsCPrefetch = 0;
 static StorageAccount::Counter *s_statsARead = 0;
 static StorageAccount::Counter *s_statsXRead = 0;
-static StorageAccount::Counter *s_statsVRead = 0;
+// static StorageAccount::Counter *s_statsVRead = 0; read-coalescing removes any chance that we perform a readv.
 static StorageAccount::Counter *s_statsWrite = 0;
 static StorageAccount::Counter *s_statsCWrite = 0;
 static StorageAccount::Counter *s_statsXWrite = 0;
@@ -308,65 +308,101 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
     return kTRUE;
   }
 
-  if (buf) {
+  // This should coalesce reads into a smaller number of large reads.
+  // If the list of buffers to read has two or more buffers within 256KB of
+  // each other, we collapse them into a single read from the storage system.
+
+  // buf == 0 implies an async read; in this case, we skip the read coalescing logic.
+  // Note that this code will cause CMSSW to never call readv().
+  if (buf)
+  {
     // Code ported from ROOT v5.26 trunk by Brian Bockelman.
-    // This should coalesce reads into a smaller number of large reads.
     Int_t k = 0;
     Bool_t result = kTRUE;
     TFileCacheRead *old = fCacheRead;
     fCacheRead = 0;
-    Long64_t curbegin = pos[0];
-    Long64_t cur;
-    char *buf2 = 0;
-    Int_t i = 0, n = 0, ctr = 0;
-    Int_t fgReadaheadSize = 262144;
-    while (i < nbuf) {
-       cur = pos[i]+len[i];
-       Bool_t bigRead = kTRUE;
-       if (cur -curbegin < fgReadaheadSize) {n++; i++; bigRead = kFALSE;}
-       if (bigRead || (i>=nbuf)) {
-          if (n == 0) {
-             //if the block to read is about the same size as the read-ahead buffer
-             //we read the block directly
-             Seek(pos[i]);
+    IOOffset curbegin = pos[0];
+    IOOffset cur;
+    std::vector<char> buf2(0);
+    Int_t i = 0; // Position in the buffer.
+    Int_t n = 0; // Number of reads we have coalesced.
 
-             StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
-             result = (storage_->xread(&buf[k], len[i])) ? kFALSE : kTRUE;
-             xstats.tick(len[i]);
+    // Size of our coalesce window.  In ROOT 5.26, this is actually a variable
+    // you can tweak, but it's not exposed in CMSSW.
+    IOSize readCoalesceSize = 262144;
+
+    // Iterate over all the requests we have been given.  We either read each
+    // individually or coalesce them into a big read.
+
+    // Loop over all the requests we have been given.  Only trigger a read if the
+    // request at pos[i] wouldn't completely fit into the read coalesce buffer.
+    // If we trigger, then we do a single read for requests i-n to i-1, inclusive.
+    // If n==0, we have special logic.
+    while (i < nbuf)
+    {
+      cur = pos[i]+len[i];
+      Bool_t bigRead = kTRUE;
+      if (cur -curbegin < readCoalesceSize)
+      {
+        // Add the current request into the set of buffers we will coalesce
+        n++; // Record we have a new request we will coalesce.
+        i++; // Examine the next request in the next loop.
+        bigRead = kFALSE;
+      }
+      // Only perform a read if one of the following holds:
+      // 1) bigRead=TRUE; i.e., we can't fit any more requests into the window.
+      // 2) i>=nbuf; if i pointed to nbuf-1 at the beginning of the while loop,
+      //    then the above logic will either set bigRead=TRUE (making case #1
+      //    true) or increment i, making i == nbuf.
+      if (bigRead || (i>=nbuf))
+      {
+        // If n == 0, no read requests could be coalesced.  Simple read.
+        if (n == 0)
+        {
+          //if the block to read is about the same size as the read-ahead buffer
+          //we read the block directly
+          Seek(pos[i]);
+
+          StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
+          // if xread returns short, then we have an error.  Break from the loop
+          // and return kTRUE - signaling an error.
+          result = ((IOSize)len[i] == storage_->xread(&buf[k], len[i])) ? kFALSE : kTRUE;
+          xstats.tick(len[i]);
              
-             if (result) break;
-             k += len[i];
-             i++;
-          } else {
-             //otherwise we read all blocks that fit in the read-ahead buffer
-             Seek(curbegin);
-             if (buf2 == 0) buf2 = new char[fgReadaheadSize];
-             //we read ahead
-             Long64_t nahead = pos[i-1]+len[i-1]-curbegin;
+          if (result)
+            break;
+          k += len[i];
+          i++;
+        }
+        else
+        {
+          //otherwise we read all blocks that fit in the read-ahead buffer
+          Seek(curbegin);
+          // Only allocate buf2 once; use std::vector to make sure the memory
+          // gets cleaned up, as xread can toss an exception.
+          if (buf2.capacity() < readCoalesceSize)
+            buf2.resize(readCoalesceSize);
+          //we read ahead
+          IOSize nahead = (IOSize)(pos[i-1]-curbegin)+len[i-1];
 
-             StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
-             result = (storage_->xread(buf2, nahead)) ? kFALSE : kTRUE;
-             xstats.tick(nahead);
+          StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
+          result = (nahead == storage_->xread(&buf2[0], nahead)) ? kFALSE : kTRUE;
+          xstats.tick(nahead);
 
-             ctr++;
-             if (result) break;
-             //now copy from the read-ahead buffer to the cache
-             Int_t kold = k;
-             for (Int_t j=0;j<n;j++) {
+          if (result)
+            break;
+
+          // Now, copy the data from the read to the appropriate buffer in
+          // order to fulfill the request.
+          for (Int_t j=0;j<n;j++) {
                 memcpy(&buf[k],&buf2[pos[i-n+j]-curbegin],len[i-n+j]);
                 k += len[i-n+j];
-             }
-             Int_t nok = k-kold;
-             Long64_t extra = nahead-nok;
-             //fBytesReadExtra += extra;
-             //fBytesRead      -= extra;
-             //fgBytesRead     -= extra;
-             n = 0;
           }
-          curbegin = pos[i];
-       }
+          n = 0;
+        }
+        curbegin = pos[i];
+      }
     }
-    if (buf2) delete [] buf2;
     fCacheRead = old;
     return result;
   }
@@ -383,21 +419,11 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
 
   // Null buffer means asynchronous reads into I/O system's cache.
   bool success;
-  if (buf)
-  {
-    StorageAccount::Stamp stats(storageCounter(s_statsVRead, "readv-actual"));
-    IOSize n = storage_->readv(&iov[0], nbuf);
-    success = (n > 0); // FIXME: what if it's short!?
-    stats.tick(n);
-  }
-  else
-  {
-    StorageAccount::Stamp astats(storageCounter(s_statsARead, "read-async"));
-    // Synchronise low-level cache with the supposed cache in TFile.
-    // storage_->caching(true, -1, 0);
-    success = storage_->prefetch(&iov[0], nbuf);
-    astats.tick(total);
-  }
+  StorageAccount::Stamp astats(storageCounter(s_statsARead, "read-async"));
+  // Synchronise low-level cache with the supposed cache in TFile.
+  // storage_->caching(true, -1, 0);
+  success = storage_->prefetch(&iov[0], nbuf);
+  astats.tick(total);
 
   // If it didn't suceeed, pass down to the base class.
   return success ? kFALSE : TFile::ReadBuffers(buf, pos, len, nbuf);
