@@ -77,7 +77,6 @@ static StorageAccount::Counter *s_statsCRead = 0;
 static StorageAccount::Counter *s_statsCPrefetch = 0;
 static StorageAccount::Counter *s_statsARead = 0;
 static StorageAccount::Counter *s_statsXRead = 0;
-// static StorageAccount::Counter *s_statsVRead = 0; read-coalescing removes any chance that we perform a readv.
 static StorageAccount::Counter *s_statsWrite = 0;
 static StorageAccount::Counter *s_statsCWrite = 0;
 static StorageAccount::Counter *s_statsXWrite = 0;
@@ -271,10 +270,11 @@ TStorageFactoryFile::ReadBufferAsync(Long64_t off, Int_t len)
   // If it does, then for example TTreeCache will drop its own cache
   // and will use the client-side cache of the actual I/O layer.
   // If len is zero ROOT is probing for prefetch support.
-  if (len)
+  if (len) {
     // FIXME: Synchronise caching.
     // storage_->caching(true, -1, 0);
     ;
+  }
 
   IOPosBuffer iov(off, (void *) 0, len ? len : 4096);
   if (storage_->prefetch(&iov, 1))
@@ -383,7 +383,8 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
           if (buf2.capacity() < readCoalesceSize)
             buf2.resize(readCoalesceSize);
           //we read ahead
-          IOSize nahead = (IOSize)(pos[i-1]-curbegin)+len[i-1];
+          IOOffset nahead = (pos[i-1]-curbegin)+len[i-1];
+          assert ((nahead >= 0) && (nahead <= readCoalesceSize));
 
           StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
           result = (nahead == storage_->xread(&buf2[0], nahead)) ? kFALSE : kTRUE;
@@ -493,7 +494,7 @@ TStorageFactoryFile::WriteBuffer(const char *buf, Int_t len)
 //////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////
 Int_t
-TStorageFactoryFile::SysOpen(const char *pathname, Int_t flags, UInt_t mode)
+TStorageFactoryFile::SysOpen(const char *pathname, Int_t flags, UInt_t /* mode */)
 {
   StorageAccount::Stamp stats(storageCounter(s_statsOpen, "open"));
 
