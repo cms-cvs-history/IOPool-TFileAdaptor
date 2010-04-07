@@ -329,7 +329,6 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
 
     // Size of our coalesce window.  In ROOT 5.26, this is actually a variable
     // you can tweak, but it's not exposed in CMSSW.
-    IOSize readCoalesceSize = 262144;
 
     // Iterate over all the requests we have been given.  We either read each
     // individually or coalesce them into a big read.
@@ -342,7 +341,7 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
     {
       cur = pos[i]+len[i];
       Bool_t bigRead = kTRUE;
-      if (cur -curbegin < readCoalesceSize)
+      if (cur -curbegin < READ_COALESCE_SIZE)
       {
         // Add the current request into the set of buffers we will coalesce
         n++; // Record we have a new request we will coalesce.
@@ -380,14 +379,16 @@ TStorageFactoryFile::ReadBuffers(char *buf, Long64_t *pos, Int_t *len, Int_t nbu
           Seek(curbegin);
           // Only allocate buf2 once; use std::vector to make sure the memory
           // gets cleaned up, as xread can toss an exception.
-          if (buf2.capacity() < readCoalesceSize)
-            buf2.resize(readCoalesceSize);
+          if (buf2.capacity() < READ_COALESCE_SIZE)
+            buf2.resize(READ_COALESCE_SIZE);
           //we read ahead
-          IOOffset nahead = (pos[i-1]-curbegin)+len[i-1];
-          assert ((nahead >= 0) && (nahead <= readCoalesceSize));
+          assert(len[i-1] >= 0);
+          assert(pos[i-1] >= curbegin);
+          assert(pos[i-1]-curbegin+len[i-1] <= READ_COALESCE_SIZE);
+          IOSize nahead = IOSized(pos[i-1]-curbegin+len[i-1]);
 
           StorageAccount::Stamp xstats(storageCounter(s_statsXRead, "read-actual"));
-          result = (nahead == storage_->xread(&buf2[0], nahead)) ? kFALSE : kTRUE;
+          result = ( nahead == storage_->xread(&buf2[0], nahead)) ? kFALSE : kTRUE;
           xstats.tick(nahead);
 
           if (result)
